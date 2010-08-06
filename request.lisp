@@ -188,6 +188,40 @@ second value."
                      result)))
             (chunked-input-stream-trailers (flexi-stream-stream stream)))))
 
+(defun drakma-open-tcp-stream (host port &key socks-host socks-port
+                                    #+:lispworks connection-timeout
+                                    #+:lispworks read-timeout
+                                    #+(and :lispworks (not :lw-does-not-have-write-timeout)) write-timeout)
+  "Creates a TCP stream and returns it."
+  (declare (optimize (debug 3)))
+  (flet ((create-stream (host port)
+           "This is a raw socket stream creation function that we wrap
+            with various other functionality like SOCKS negotiation."
+#+:lispworks
+           (comm:open-tcp-stream host port
+                                 :element-type 'octet
+                                 :timeout connection-timeout
+                                 :read-timeout read-timeout
+                                 #-:lw-does-not-have-write-timeout
+                                 :write-timeout
+                                 #-:lw-does-not-have-write-timeout
+                                 write-timeout
+                                 :errorp t)
+           #-:lispworks
+           (usocket:socket-stream
+            (usocket:socket-connect host port
+                                    :element-type 'octet
+                                    #+:openmcl :deadline
+                                    #+:openmcl deadline
+                                    :nodelay t))))
+    (if socks-host
+        (let* ((socks-stream (create-stream socks-host socks-port)))
+          (socks:socks-connect socks-stream
+                               (concatenate 'string host ".")
+                               port)
+          socks-stream)
+        (create-stream host port))))
+        
 (defun http-request (uri &rest args
                          &key (protocol :http/1.1)
                               (method :get)
@@ -205,6 +239,7 @@ second value."
 		              (decompress t)
                               proxy
                               proxy-basic-authorization
+                              socks-proxy
                               additional-headers
                               (redirect 5)
                               (redirect-methods '(:get :head))
@@ -338,13 +373,19 @@ decompressed body sequence or string; if WANT-STREAM is T, then
 BODY-OR-STREAM is a flexi-stream backed by a gzip-input-stream, which
 in turn wraps the socket stream.
 
-If PROXY is not NIL, it should be a string denoting a proxy
-server through which the request should be sent.  Or it can be a
-list of two values - a string denoting the proxy server and an
-integer denoting the port to use \(which will default to 80
-otherwise).  PROXY-BASIC-AUTHORIZATION is used like
-BASIC-AUTHORIZATION, but for the proxy, and only if PROXY is
-true.
+If PROXY is not NIL, it should be a string denoting an HTTP proxy
+server through which the request should be sent.  Or it can be a list
+of two values -- a string denoting the proxy server and an integer
+denoting the port to use \(which will default to 80 otherwise).
+PROXY-BASIC-AUTHORIZATION is used like BASIC-AUTHORIZATION, but for
+the proxy, and only if PROXY is true.
+
+If SOCKS-PROXY is not NIL, it should be a string denoting a SOCKSu5
+proxy server through which the request should be sent.  Or it can be a
+list of two values -- a string denoting the proxy server and an
+integer denoting the port to use \(which will default to 1080
+otherwise).  If both PROXY and SOCKS-PROXY are specified, then the
+request goes through the SOCKS5 proxy and then through the HTTP proxy.
 
 ADDITIONAL-HEADERS is a name/value alist of additional HTTP headers
 which should be sent with the request.  Unlike in PARAMETERS, the cdrs
@@ -430,6 +471,10 @@ only available on CCL 1.2 and later."
   (when proxy
     (when (atom proxy)
       (setq proxy (list proxy 80))))
+  ;; convert SOCKS-PROXY argument to canonical form
+  (when socks-proxy
+    (when (atom socks-proxy)
+      (setq socks-proxy (list socks-proxy 1080))))
   ;; make sure we don't get :CRLF on Windows
   (let ((*default-eol-style* :lf)
         (file-parameters-p (find-if-not #'stringp parameters :key #'cdr))
@@ -470,22 +515,19 @@ only available on CCL 1.2 and later."
                 (setq write-timeout nil))
               (setq http-stream (or stream
                                     #+:lispworks
-                                    (comm:open-tcp-stream host port
-                                                          :element-type 'octet
-                                                          :timeout connection-timeout
-                                                          :read-timeout read-timeout
-                                                          #-:lw-does-not-have-write-timeout
-                                                          :write-timeout
-                                                          #-:lw-does-not-have-write-timeout
-                                                          write-timeout
-                                                          :errorp t)
+                                    (drakma-open-tcp-stream host port
+                                                            :socks-host (first socks-proxy)
+                                                            :socks-port (second socks-proxy)
+                                                            :timeout connection-timeout
+                                                            :read-timeout read-timeout
+                                                            #-:lw-does-not-have-write-timeout
+                                                            :write-timeout
+                                                            #-:lw-does-not-have-write-timeout
+                                                            write-timeout)
                                     #-:lispworks
-                                    (usocket:socket-stream
-                                     (usocket:socket-connect host port
-                                                             :element-type 'octet
-                                                             #+:openmcl :deadline
-                                                             #+:openmcl deadline
-                                                             :nodelay t))))
+                                    (drakma-open-tcp-stream host port
+                                                            :socks-host (first socks-proxy)
+                                                            :socks-port (second socks-proxy))))
               #+:openmcl
               (when deadline
                 ;; it is correct to set the deadline here even though
