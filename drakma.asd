@@ -53,6 +53,7 @@
                (:file "util")
                (:file "read")
                (:file "cookies")
+               (:file "cl-socks")
                (:file "request"))
   :depends-on (:puri
                :cl-base64

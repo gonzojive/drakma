@@ -33,6 +33,7 @@
   "The default function used by Drakma to determine how the content
 body is to be read.  See the docstring of *BODY-FORMAT-FUNCTION* for
 more info."
+  (declare (optimize (debug 3)))
   (handler-case
       (let ((transfer-encodings (header-value :transfer-encoding headers))
             (content-encodings (header-value :content-encoding headers)))
@@ -131,7 +132,7 @@ body using the boundary BOUNDARY."
       (format stream "--~A--" boundary)
       (crlf))))
 
-(defun read-body (stream headers must-close textp decodep)
+(defun read-body (stream headers must-close textp external-format decodep)
   "Reads the message body from the HTTP stream STREAM using the
 information contained in HEADERS \(as produced by HTTP-REQUEST).  If
 DECODEP is true and a gzip `Content-Encoding' header is found, the
@@ -140,6 +141,7 @@ content type `text' and will be returned as a string.  Otherwise an
 array of octets \(or NIL for an empty body) is returned.  Returns the
 optional `trailer' HTTP headers of the chunked stream \(if any) as a
 second value."
+  (declare (optimize (debug 3)))
   (let ((content-length (ignore-errors
                            (parse-integer (header-value :content-length headers))))
 	(gzip-encoded? (ignore-errors
@@ -162,9 +164,10 @@ second value."
 		       (setf result (gzip-stream:gunzip-sequence result)))
                      (when textp
                        (setf result
-                             (octets-to-string result :external-format (flexi-stream-external-format stream))
+                             (octets-to-string result :external-format external-format)
                              #+:clisp (flexi-stream-element-type stream)
                              #+:clisp element-type))
+
                      result))
                   ((or chunkedp must-close)
                    ;; no content length, read until EOF (or end of chunking)
@@ -182,7 +185,7 @@ second value."
 		       (setf result (gzip-stream:gunzip-sequence result)))
                      (when textp
                        (setf result
-                             (octets-to-string result :external-format (flexi-stream-external-format stream))
+                             (octets-to-string result :external-format external-format)
                              #+:clisp (flexi-stream-element-type stream)
                              #+:clisp element-type))
                      result)))
@@ -759,7 +762,7 @@ only available on CCL 1.2 and later."
                                (unless (or want-stream (eq method :head))
                                  (let (trailers)
                                    (multiple-value-setq (body trailers)
-                                       (read-body http-stream headers must-close external-format-body decompress))
+                                       (read-body http-stream headers must-close external-format-body external-format-body decompress))
                                    (when trailers
                                      (drakma-warn "Adding trailers from chunked encoding to HTTP headers.")
                                      (setq headers (nconc headers trailers)))))
