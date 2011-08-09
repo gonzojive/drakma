@@ -254,7 +254,9 @@ the optional cookie parameters."
     (dolist (substring (split-set-cookie-string string))        
       (with-sequence-from-string (stream substring)
         (let* ((name/value (read-name-value-pair stream :cookie-syntax t))
-               (parameters (read-name-value-pairs stream :value-required-p nil :cookie-syntax t)))
+               (parameters (restart-case (read-name-value-pairs stream :value-required-p nil :cookie-syntax t)
+			     (use-nil ()
+			       :report "Use nil for the optional cookie parameters"))))
           (push (list (car name/value) (cdr name/value) parameters) result))))
     (nreverse result)))
 
